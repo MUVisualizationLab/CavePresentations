@@ -1,0 +1,66 @@
+instructions:
+	presentation mode:
+		click on the left or right walls to advance
+		or move the joystick left/right to advance	
+		
+		keyboard shortcuts:
+			left/right arrows to advance
+			1-9 are jump keys
+			space bar for next slide
+
+
+How this works:
+	1:
+		(MVR Server only)
+		Launch a Python script via subprocess that uses Powerpoint's Interop COM API to render out slides as high res PNG files
+		Also retrieve notes and some other metadata, save it to a JSON file.
+		Back in Unity: Load the JSON file
+		Send the JSON data to the MVR cluster nodes
+	2:
+		(all nodes)
+		Use the paths in the JSON to import the generated PNGs into Unity as textures
+		Use the 'notes' data to set up text objects
+	3:
+		Proceed into normal powerpoint in 3D paradigm
+	
+	The PPTControl source code and its venv is in the "pptcontrol" folder
+	The compiled version (made in Nuitka) is in Assets/StreamingAssets.	
+
+bugs todo:	
+	X	stop crashing on cluster launch
+	X	implement notes onto the prefab
+	X	add timestamp
+		make sure file picker works in builds in cave
+		automatically set up jump keys based on presentation length
+		
+future features:
+	file picker for all files listed in folder
+	drawing layer
+	reimplement transitions
+	
+Rob's priorities:
+	smarter export that does 3D layering
+		select the background layer, all text objects, and all image objects, export them separately
+		use Pillow to make an Atlas, save it as DXT1.
+	support for movies
+		youtube files
+		and embedded files
+	fix file browser?
+	cool background
+	support for bullet point sequencing?
+	
+ideas:
+	instead of the interop, try:
+	https://www.nuget.org/packages/documentformat.openxml#readme-body-tab	Does this have an export function?
+	Interop PNG export does not preserve alpha channel:
+		maybe try chroma key?
+		SVG and PDF exports preserve alpha, but pillow doesn't support them
+		PNG is actually indexed color sometimes??
+		JPG and TIF have no alpha channel
+
+		SVG can be handled by resvg or cairo or inkscape 
+		PDF can be handled by python-poppler ??
+		don't like subproccesses
+		I like to render to a buffer ideally, not a render to file method
+
+		use https://github.com/deeplook/svglib
