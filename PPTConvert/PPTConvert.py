@@ -9,13 +9,11 @@ import pythoncom
 import win32com.client
 
 # Graphics processing
-#from svglib.svglib import svg2rlg
-#from reportlab.graphics import renderPM
 from PIL import Image, ImageChops
 
-def initPPT(ppt_path, out_dir):
+#shared methods
+def initPPT(ppt_path):
     print("Opening PowerPoint...", flush=True)
-    global ppt_app, presentation, metadata
 
     if not os.path.isfile(ppt_path):
         raise FileNotFoundError(f"PowerPoint file not found: {ppt_path}")
@@ -30,6 +28,7 @@ def initPPT(ppt_path, out_dir):
     # Initialize COM for this thread
     pythoncom.CoInitialize()
     
+    global ppt_app, presentation
     ppt_app = None
     presentation = None
 
@@ -51,6 +50,7 @@ def initPPT(ppt_path, out_dir):
     count = slides.Count
         
     #initalize the metadata with some header info
+    global metadata
     metadata = [{
         "count" : count,
         "source" : ppt_path_abs,
@@ -83,7 +83,12 @@ def getNotes(slide):
     return notetext
 
 def closePPT():
-    # Close presentation and quit PowerPoint
+    # Save metadata to a JSON file    
+    print("Saving metadata...", flush=True)
+    metadata_path = os.path.join(out_dir, "metadata.json")
+    with open(metadata_path, "w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2, ensure_ascii=False)
+
     print("Closing PowerPoint...", flush=True)
     try:
         if presentation:
@@ -97,9 +102,40 @@ def closePPT():
         pass
     pythoncom.CoUninitialize()
 
-def export_slides(ppt_path: str, out_dir: str):
-    slides, count = initPPT(ppt_path, out_dir)     
+def checkForDupe(ppt_path: str, layers: bool):
+    #This method is an optimization that prevents redundant processing.
 
+    #If the metafile doesn't exit, then the PPT file has never been processed.
+    jsonfile = os.path.join(out_dir, "metadata.json")
+    if os.path.isfile(jsonfile) == False:        
+        return True
+    
+    #Lets examine the metadata file
+    with open(jsonfile, mode="r", encoding="utf-8") as read_file:
+        jsondata = json.load(read_file)
+        
+    #If the metadata refers to a different PPT, we need to redo the conversion
+    ppt_path_abs = os.path.abspath(ppt_path)
+    if ppt_path_abs != jsondata[0]['source']:        
+        return True
+
+    # If the 3D setting changed, we need to redo the conversion
+    if layers != jsondata[0]['layers']:        
+        return True
+        
+    #If the timestamps changed, we need to redo the conversion
+    if stat(ppt_path_abs).st_mtime != jsondata[0]['timestamp']:        
+        return True
+
+    #If we made it this far, then...
+    print("PPT conversion is not needed.", flush=True)
+    return False
+    
+
+#end shared methods
+
+def export_slides(ppt_path: str):
+    slides, count = initPPT(ppt_path)     
     for i in range(1, count + 1):            
         slide = slides.Item(i)
         out_path = os.path.abspath(os.path.join(out_dir, f"{i:03d}.png"))
@@ -117,15 +153,9 @@ def export_slides(ppt_path: str, out_dir: str):
         }
         metadata.append(metadataItem)
 
-    # Save metadata to a JSON file    
-    print("Saving metadata...", flush=True)
-    metadata_path = os.path.join(out_dir, "metadata.json")
-    with open(metadata_path, "w", encoding="utf-8") as f:
-        json.dump(metadata, f, indent=2, ensure_ascii=False)
-
     closePPT()
 
-def export_slides_layered(ppt_path: str, out_dir: str):
+def export_slides_layered(ppt_path: str):
     def expandSlides():
         #start up metadata
         for i in range(1, count + 1):
@@ -156,7 +186,7 @@ def export_slides_layered(ppt_path: str, out_dir: str):
                 continue
             s.Delete()
 
-    def exportLayers(out_dir):
+    def exportLayers():
         count = presentation.Slides.Count
         loopCounter = 1
         for i in range(1, count, 3):
@@ -186,80 +216,46 @@ def export_slides_layered(ppt_path: str, out_dir: str):
             
             loopCounter += 1
 
-    def combineLayers(out_dir):        
-        #combine images
+    def combineLayers():        
         count = int(presentation.Slides.Count / 3)
         for i in range(1, count + 1):
             print(f"Processing slide {i} of {count}...", flush=True)
+            #we have to convert to RGB because Powerpoint will use an indexed pallete if the image is simple
             img0 = Image.open(os.path.abspath(os.path.join(out_dir, f"{i:03d}_0.png"))).convert('RGB')     #bg 
             img1 = Image.open(os.path.abspath(os.path.join(out_dir, f"{i:03d}_1.png"))).convert('RGB')     #text
             img2 = Image.open(os.path.abspath(os.path.join(out_dir, f"{i:03d}_2.png"))).convert('RGB')     #photos
             bigImg = Image.new(mode='RGBA', size=[img1.width, img0.height + img1.height], color="#00000000")
     
-            #drawing = svg2rlg("002.svg")
-            #png_bytes = renderPM.drawToString(drawing, fmt="PNG", dpi=30
-
-            #difference masks
+            #Generate alpha channels with difference masks
             img1.putalpha(ImageChops.difference(img1, img0).convert("L"))
             img2.putalpha(ImageChops.difference(img2, img0).convert("L"))
     
             #make the collage            
-            bigImg.paste(img1, (0,0))
+            bigImg.paste(img1, (0,0))                       #text takes up the top half
             img0 = img0.resize((2048, 2048))
-            bigImg.paste(img0, (0, img1.height))            
+            bigImg.paste(img0, (0, img1.height))            #bottom left is the background, half res           
             img2 = img2.resize((2048, 2048))
-            bigImg.paste(img2, (img0.width, img1.height))
+            bigImg.paste(img2, (img0.width, img1.height))   #bottom right is the photos, half res
 
-            #save the file as PNG.
-            finalpath = os.path.abspath(os.path.join(out_dir, f"{i:03d}.png"))
+            #save the file as DDS.
+            finalpath = os.path.abspath(os.path.join(out_dir, f"{i:03d}.dds"))
             metadata[i]["path"] = finalpath
-            bigImg.save(finalpath)
+            #DXT1 has 1bit alpha, which should be sufficient for our use
+            bigImg.save(finalpath, pixel_format="DXT1")
 
         #remove temp PNGs
         for filename in listdir(out_dir):
-            if "_" in filename:
+            if "_" in filename and filename[-3:].lower() == 'png':
                 os.remove(os.path.join(out_dir, filename))  
 
-    slides, count = initPPT(ppt_path, out_dir)
-    
-    expandSlides()
-    exportLayers(out_dir)
-    combineLayers(out_dir) 
-    
-    # Save metadata to a JSON file    
-    print("Saving metadata...", flush=True)
+    #the processing pipeline for 3D slides:
+    slides, count = initPPT(ppt_path)
     metadata[0]["layers"] = True    #overriding this value
-    metadata_path = os.path.join(out_dir, "metadata.json")
-    with open(metadata_path, "w", encoding="utf-8") as f:
-        json.dump(metadata, f, indent=2, ensure_ascii=False)
-
+    expandSlides()
+    exportLayers()
+    combineLayers()       
     closePPT()
         
-def checkForDupe(ppt_path: str, out_dir: str, layers: bool):  
-    #If the metafile doesn't exit, then the PPT file has never been processed.
-    jsonfile = os.path.join(out_dir, "metadata.json")
-    if os.path.isfile(jsonfile) == False:        
-        return True
-    
-    #Lets examine the metadata file
-    with open(jsonfile, mode="r", encoding="utf-8") as read_file:
-        jsondata = json.load(read_file)
-        
-    #If the metadata refers to a different PPT, we need to redo the conversion
-    ppt_path_abs = os.path.abspath(ppt_path)
-    if ppt_path_abs != jsondata[0]['source']:        
-        return True
-
-    # If the 3D layers settings does not match, we need to redo the conversion
-    if layers != jsondata[0]['layers']:        
-        return True
-        
-    #If the timestamps match, then the existing images are in sync.
-    if stat(ppt_path_abs).st_mtime == jsondata[0]['timestamp']:        
-        print("Conversion is not needed.", flush=True)
-        return False
-    else:
-        return True
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Export PowerPoint slides to PNG using pywin32 COM")    
@@ -268,21 +264,17 @@ if __name__ == "__main__":
     parser.add_argument("ppt", help="Path to PowerPoint file")
 
     args = parser.parse_args()
-    
-    #Optimization: Can we skip the conversion process?
-    if checkForDupe(args.ppt, args.out, args.layers) == False:
-        sys.exit(0)
-    
-    try:
-        if args.layers:
-            export_slides_layered(args.ppt, args.out)
-        else:
-            export_slides(args.ppt, args.out)           
-    except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
+    global out_dir
+    out_dir = args.out
+
+    if checkForDupe(args.ppt, args.layers) == False:
+        sys.exit(0)    
+
+    if args.layers:
+        export_slides_layered(args.ppt)
+    else:
+        export_slides(args.ppt)           
         
     print("Conversion complete.", flush=True)
     print()
     sys.exit(0)
-

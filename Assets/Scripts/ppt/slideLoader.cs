@@ -141,8 +141,8 @@ public class slideLoader : MonoBehaviour {
                 }
 
                 Texture2D tempTexture = DownloadHandlerTexture.GetContent(webRequest);
-                Texture2D texture = new Texture2D(tempTexture.width, tempTexture.height, TextureFormat.RGB24, false);
-                texture.SetPixels(tempTexture.GetPixels());
+                Texture2D texture = new Texture2D(tempTexture.width, tempTexture.height, tempTexture.format, false);
+                texture.SetPixels32(tempTexture.GetPixels32());
                 texture.Compress(false);
                 texture.Apply();
                 texture.name = Path.GetFileNameWithoutExtension(imagePath);

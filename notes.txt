@@ -44,7 +44,11 @@ Rob's priorities:
 		use Pillow to make an Atlas, save it as DXT1.
 	support for movies
 		youtube files
+			scan text for HTML links to youtube et al?
+			yt-dlp ?
 		and embedded files
+			I can use Interop to identify which slides contain movies
+			I can use 'import zipfile' to pull the embedded file out for Unity import
 	fix file browser?
 	cool background
 	support for bullet point sequencing?
