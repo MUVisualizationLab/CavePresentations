@@ -1,10 +1,13 @@
 {
   "dependencies": {
     "com.middlevr": "file:C:/Program Files/MiddleVR3/unity_packages/com.middlevr.tgz",
+    "com.middlevr.urp": "file:C:/Program Files/MiddleVR3/unity_packages/com.middlevr.urp.tgz",
     "com.unity.2d.sprite": "1.0.0",
     "com.unity.2d.tilemap": "1.0.0",
     "com.unity.ide.visualstudio": "2.0.27",
     "com.unity.nuget.newtonsoft-json": "3.2.2",
+    "com.unity.render-pipelines.core": "17.0.4",
+    "com.unity.render-pipelines.universal": "17.0.4",
     "com.unity.test-framework": "1.6.0",
     "com.unity.timeline": "1.8.11",
     "com.unity.ugui": "2.0.0",

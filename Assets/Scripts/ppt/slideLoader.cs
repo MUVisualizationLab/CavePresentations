@@ -150,7 +150,7 @@ public class slideLoader : MonoBehaviour {
             }
 
             //load the note
-            notes[i - 1] = note;
+            notes[i - 1] = note.ToString();
             yield return null;
         }
 
