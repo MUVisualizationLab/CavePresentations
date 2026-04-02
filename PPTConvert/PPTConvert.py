@@ -10,7 +10,6 @@ import win32com.client
 
 # Graphics processing
 from PIL import Image, ImageChops
-from threading import Thread, active_count
 
 class Settings:
     def __init__(self, pptFile, outDir, layers = False, debug = False):
@@ -28,31 +27,33 @@ class Settings:
         self.slideCount = 0     #will be filled later
 
     #This method is an optimization that prevents redundant processing.
-    def checkForDupe(self):
+    def avoidRedundancy(self):
+        if self.debug:
+            return
+            
         #If the metafile doesn't exit, then the PPT file has never been processed.
         jsonfile = os.path.join(self.outDir, "metadata.json")
         if os.path.isfile(jsonfile) == False:        
-            return True
+            return
     
-        #Lets examine the metadata file
+        #If the metadata refers to a different PPT, we need to redo the conversion               
         with open(jsonfile, mode="r", encoding="utf-8") as read_file:
-            jsondata = json.load(read_file)
+            jsondata = json.load(read_file)        
         
-        #If the metadata refers to a different PPT, we need to redo the conversion       
         if self.pptFile != jsondata[0]['source']:        
-            return True
+            return
 
         # If the 3D setting changed, we need to redo the conversion
         if self.layers != jsondata[0]['layers']:        
-            return True
+            return 
         
         #If the timestamps changed, we need to redo the conversion
         if self.timestamp != jsondata[0]['timestamp']:        
-            return True
+            return 
 
         #If we made it this far, then...
         print("PPT conversion is not needed.", flush=True)
-        return False
+        sys.exit(0) 
 
     def addMetadata(self, num, imgPath, note = "", transition = 0):
         #initialize header if it hasn't been made yet
@@ -251,18 +252,16 @@ class PPT:
 
 if __name__ == "__main__":
     #process the input arguments
-    parser = argparse.ArgumentParser(description="Export PowerPoint slides to PNG using pywin32 COM")    
-    parser.add_argument("-d", "--debug", action='store_true', help="Enable debug mode")
+    parser = argparse.ArgumentParser(description="Export PowerPoint slides to high quality PNG or 3D DDS for use in Unity.") 
+    parser.add_argument("-d", "--debug", action='store_true', help="Enable verbose debug mode")
     parser.add_argument("-3d", "--layers", action='store_true', help="Enable automatic 3D layer conversion")
-    parser.add_argument("-o", "--out", default="slides", help="Output directory for PNG files")
+    parser.add_argument("-o", "--out", default="slides", help="Specify texture output directory")
     parser.add_argument("ppt", help="Path to PowerPoint file")
     args = parser.parse_args()
 
     global settings
-    settings = Settings(args.ppt, args.out, args.layers, args.debug)
-    
-    if settings.checkForDupe() == False and settings.debug == False:
-        sys.exit(0)    
+    settings = Settings(args.ppt, args.out, args.layers, args.debug)    
+    settings.avoidRedundancy()           
 
     #main conversion pipeline starts here
     ppt = PPT()
