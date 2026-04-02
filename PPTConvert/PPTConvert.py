@@ -10,220 +10,222 @@ import win32com.client
 
 # Graphics processing
 from PIL import Image, ImageChops
+from threading import Thread, active_count
 
-#shared methods
-def initPPT(ppt_path):
-    print("Opening PowerPoint...", flush=True)
+class Settings:
+    def __init__(self, pptFile, outDir, layers = False, debug = False):
+        self.pptFile = os.path.abspath(pptFile)
+        if not os.path.isfile(self.pptFile):
+            raise FileNotFoundError(f"PowerPoint file not found: {self.pptFile}")
 
-    if not os.path.isfile(ppt_path):
-        raise FileNotFoundError(f"PowerPoint file not found: {ppt_path}")
+        self.timestamp = stat(self.pptFile).st_mtime
+        self.outDir = os.path.abspath(outDir)
+        self.layers = layers
+        self.debug = debug
+        if debug:
+            print("Debug text enabled.")
+        self.metadata = None    #will be filled later
+        self.slideCount = 0     #will be filled later
 
-    makedirs(out_dir, exist_ok=True)
-    
-    #remove old images from output directory
-    for filename in listdir(out_dir):
-        if filename.lower().endswith(".png") or filename.lower().endswith(".dds"):
-            os.remove(os.path.join(out_dir, filename))  
-
-    # Initialize COM for this thread
-    pythoncom.CoInitialize()
-    
-    global ppt_app, presentation
-    ppt_app = None
-    presentation = None
-
-    # Create PowerPoint COM application
-    ppt_app = win32com.client.Dispatch("PowerPoint.Application")
-
-    # Ensure absolute path and use positional args for Presentations.Open
-    ppt_path_abs = os.path.abspath(ppt_path)
-    if not os.path.exists(ppt_path_abs):
-        raise FileNotFoundError(f"PowerPoint file not found: {ppt_path_abs}")
-
-    try:
-        presentation = ppt_app.Presentations.Open(ppt_path_abs, True, False, 0)
-    except Exception as com_err:
-        # Re-raise with a clearer message including COM error details
-        raise RuntimeError(f"Failed to open presentation '{ppt_path_abs}': {com_err}") from com_err
-
-    slides = presentation.Slides
-    count = slides.Count
-        
-    #initalize the metadata with some header info
-    global metadata
-    metadata = [{
-        "count" : count,
-        "source" : ppt_path_abs,
-        "timestamp" : stat(ppt_path_abs).st_mtime,
-        "layers" : False
-    }]
-
-    return slides, count
-
-def getNotes(slide):
-    # Get slide notes (if any)
-    notes_text_parts = []
-    try:
-        noteShapes = slide.NotesPage.Shapes
-        for shape in noteShapes:
-            try:
-                if getattr(shape, 'HasTextFrame', False):
-                    tf = shape.TextFrame
-                    if tf and getattr(tf, 'HasText', False):
-                        text = tf.TextRange.Text
-                        if text:
-                            notes_text_parts.append(str(text))
-            except Exception:
-                continue
-    except Exception:
-        # no notes page or other COM error
-        notes_text_parts = []
-
-    notetext = " ".join(notes_text_parts[:-1]).strip()  
-    return notetext
-
-def closePPT():
-    # Save metadata to a JSON file    
-    print("Saving metadata...", flush=True)
-    metadata_path = os.path.join(out_dir, "metadata.json")
-    with open(metadata_path, "w", encoding="utf-8") as f:
-        json.dump(metadata, f, indent=2, ensure_ascii=False)
-
-    print("Closing PowerPoint...", flush=True)
-    try:
-        if presentation:
-            presentation.Close()
-    except Exception:
-        pass
-    try:
-        if ppt_app:
-            ppt_app.Quit()
-    except Exception:
-        pass
-    pythoncom.CoUninitialize()
-
-def checkForDupe(ppt_path: str, layers: bool):
     #This method is an optimization that prevents redundant processing.
-
-    #If the metafile doesn't exit, then the PPT file has never been processed.
-    jsonfile = os.path.join(out_dir, "metadata.json")
-    if os.path.isfile(jsonfile) == False:        
-        return True
+    def checkForDupe(self):
+        #If the metafile doesn't exit, then the PPT file has never been processed.
+        jsonfile = os.path.join(self.outDir, "metadata.json")
+        if os.path.isfile(jsonfile) == False:        
+            return True
     
-    #Lets examine the metadata file
-    with open(jsonfile, mode="r", encoding="utf-8") as read_file:
-        jsondata = json.load(read_file)
+        #Lets examine the metadata file
+        with open(jsonfile, mode="r", encoding="utf-8") as read_file:
+            jsondata = json.load(read_file)
         
-    #If the metadata refers to a different PPT, we need to redo the conversion
-    ppt_path_abs = os.path.abspath(ppt_path)
-    if ppt_path_abs != jsondata[0]['source']:        
-        return True
+        #If the metadata refers to a different PPT, we need to redo the conversion       
+        if self.pptFile != jsondata[0]['source']:        
+            return True
 
-    # If the 3D setting changed, we need to redo the conversion
-    if layers != jsondata[0]['layers']:        
-        return True
+        # If the 3D setting changed, we need to redo the conversion
+        if self.layers != jsondata[0]['layers']:        
+            return True
         
-    #If the timestamps changed, we need to redo the conversion
-    if stat(ppt_path_abs).st_mtime != jsondata[0]['timestamp']:        
-        return True
+        #If the timestamps changed, we need to redo the conversion
+        if self.timestamp != jsondata[0]['timestamp']:        
+            return True
 
-    #If we made it this far, then...
-    print("PPT conversion is not needed.", flush=True)
-    return False
-    
+        #If we made it this far, then...
+        print("PPT conversion is not needed.", flush=True)
+        return False
 
-#end shared methods
+    def addMetadata(self, num, imgPath, note = "", transition = 0):
+        #initialize header if it hasn't been made yet
+        if self.metadata == None:
+            self.metadata = [{
+                "source" : self.pptFile,
+                "count" : self.slideCount,
+                "timestamp" : self.timestamp,
+                "layers" : self.layers
+            }]
 
-def export_slides(ppt_path: str):
-    slides, count = initPPT(ppt_path)     
-    for i in range(1, count + 1):            
-        slide = slides.Item(i)
-        out_path = os.path.abspath(os.path.join(out_dir, f"{i:03d}.png"))
-
-        # Export slide as PNG
-        print(f"Rendering slide {i} of {count}...", flush=True)
-        slide.Export(out_path, "PNG", 4096, 2048)   #powers of 2. Aspect ratio is corrected in Unity.            
-        
-        # Structure the gathered data into a dictionary for this slide
+        # Structure the gathered data into a dictionary
         metadataItem = {
-            "num" : i,
-            "path" : out_path,
-            "note" : getNotes(slide),
-            "transition" : slide.SlideShowTransition.EntryEffect
+            "num"        : num,
+            "path"       : imgPath,
+            "note"       : note,
+            "transition" : transition
         }
-        metadata.append(metadataItem)
-
-    closePPT()
-
-def export_slides_layered(ppt_path: str):
-    def expandSlides():
-        #start up metadata
-        for i in range(1, count + 1):
-            slide = slides.Item(i)
-            # Structure the gathered data into a dictionary for this slide
-            metadataItem = {
-                "num" : i,
-                "path" : "",
-                "note" : getNotes(slide),
-                "transition" : slide.SlideShowTransition.EntryEffect
-            }
-            metadata.append(metadataItem)
+        self.metadata.append(metadataItem)
         
-            #triple the amount of slides in the ppt
-        print(f"Expanding slide layers...", flush=True)
-        repeat_count = 3  # original + 2 duplicates
-        for i in range(count, 0, -1):
-            slide = slides.Item(i)                        
-            for n in range(repeat_count - 1):
-                newslide = slide.Duplicate()
-                
-    def filterShapes(slide, keep_text=False, keep_images=False):
+    # Save metadata to a JSON file
+    def closeMetadata(self):
+        print("Saving metadata...", flush=True)
+        metadata_path = os.path.join(self.outDir, "metadata.json")
+        with open(metadata_path, "w", encoding="utf-8") as f:
+            json.dump(self.metadata, f, indent=2, ensure_ascii=True)
+
+class PPT:
+    def __init__(self):
+        global settings
+        print("Opening PowerPoint...", flush=True)   
+        makedirs(settings.outDir, exist_ok=True)
+    
+        #remove old images from output directory
+        for filename in listdir(settings.outDir):
+            if filename.lower().endswith(".png") or filename.lower().endswith(".dds"):
+                if settings.debug:
+                    print(f"Deleting old temp file: {filename}")
+                os.remove(os.path.join(settings.outDir, filename))  
+
+        # Initialize COM for this thread
+        pythoncom.CoInitialize()    
+
+        # Create PowerPoint COM application
+        self.ppt_app = win32com.client.Dispatch("PowerPoint.Application")
+        try:
+            self.presentation = self.ppt_app.Presentations.Open(settings.pptFile, True, False, 0)
+        except Exception as com_err:
+            raise RuntimeError(f"Failed to open presentation '{settings.pptFile}': {com_err}") from com_err
+
+        self.slides = self.presentation.Slides
+        settings.slideCount = self.presentation.Slides.Count
+
+        if settings.debug:
+            print("Powerpoint Presentation initialized.")
+    
+    #utilities
+    def _getNotes(slide):
+        # Get slide notes (if any)
+        notes_text_parts = []
+        try:
+            noteShapes = slide.NotesPage.Shapes
+            for shape in noteShapes:
+                try:
+                    if getattr(shape, 'HasTextFrame', False):
+                        tf = shape.TextFrame
+                        if tf and getattr(tf, 'HasText', False):
+                            text = tf.TextRange.Text
+                            if text:
+                                notes_text_parts.append(str(text))
+                except Exception:
+                    continue
+        except Exception:
+            # no notes page or other COM error
+            notes_text_parts = []
+
+        notetext = " ".join(notes_text_parts[:-1]).strip()  
+        return notetext
+    
+    def _filterShapes(slide, keep_text=False, keep_images=False):
         for shape in range(slide.Shapes.Count, 0, -1):
             s = slide.Shapes.Item(shape)
             if keep_text and getattr(s, 'HasTextFrame', False):
                 continue
-            if keep_images and getattr(s, 'Type', None) == 13:  # msoPicture
+            if keep_images and getattr(s, 'Type', None) == 13:  # msoPicture?
                 continue
             s.Delete()
+    
+    def close(self):
+        global settings
+        print("Closing PowerPoint...", flush=True)
+        try:
+            self.presentation.Close()
+            self.ppt_app.Quit()
+        except Exception:
+            pass
+        
+        settings.closeMetadata()
+        pythoncom.CoUninitialize()
 
-    def exportLayers():
-        count = presentation.Slides.Count
+
+    #the simple 2D version        
+    def render2DSlides(self):
+        global settings
+        for i in range(1, settings.slideCount + 1):            
+            print(f"Rendering slide {i} of {settings.slideCount}...", flush=True)
+            
+            # Export slide as PNG
+            slide = self.slides.Item(i)
+            out_path = os.path.abspath(os.path.join(settings.outDir, f"{i:03d}.png"))
+            slide.Export(out_path, "PNG", 4096, 2048)   #powers of 2. Aspect ratio is corrected in Unity.            
+        
+            # Store metadata for the gathered data into a dictionary for this slide
+            settings.addMetadata(i, out_path,  PPT._getNotes(slide), slide.SlideShowTransition.EntryEffect)
+    
+    def expandSlides(self):
+        #get metadata in place before we mix things up 
+        global settings   
+        for i in range(1, settings.slideCount + 1):
+            slide = self.slides.Item(i)            
+            settings.addMetadata(i, "", PPT._getNotes(slide), slide.SlideShowTransition.EntryEffect)
+        
+        #triple the amount of slides in the ppt, creating placeholders for the filtering to occur
+        print(f"Expanding slide layers...", flush=True)
+        repeat_count = 3  # original + 2 duplicates
+        for i in range(settings.slideCount, 0, -1):
+            slide = self.slides.Item(i)                        
+            for n in range(repeat_count - 1):
+                newSlide = slide.Duplicate()
+        
+
+    #filter the slide contents and save the modified slides to PNG
+    def render3DSlides(self):
+        global settings
+        count = self.presentation.Slides.Count
         loopCounter = 1
+
         for i in range(1, count, 3):
             print(f"Separating slide {loopCounter} of {int(count / 3)}...", flush=True)
             #0 = bg. 
-            slide = presentation.Slides.Item(i)
+            slide = self.presentation.Slides.Item(i)
             for shape in range(slide.Shapes.Count, 0, -1):
                 slide.Shapes.Item(shape).Delete()
 
-            out_path = os.path.abspath(os.path.join(out_dir, f"{loopCounter:03d}_0.png"))
+            out_path = os.path.join(settings.outDir, f"{loopCounter:03d}_0.png")
             slide.Export(out_path, "PNG", 4096, 2048)
 
             #1 = text only. Clear the background and delete all non-text elements.
-            #https://learn.microsoft.com/en-us/office/vba/api/powerpoint.slide.background
-            slide = presentation.Slides.Item(i + 1)
+            slide = self.presentation.Slides.Item(i + 1)            
+            #see https://learn.microsoft.com/en-us/office/vba/api/powerpoint.slide.background
             #slide.FollowMasterBackground = 0;
             #slide.Background.Fill.Transparency = 1.0
-            filterShapes(slide, keep_text=True, keep_images=False)          
-            out_path = os.path.abspath(os.path.join(out_dir, f"{loopCounter:03d}_1.png"))
+            PPT._filterShapes(slide, keep_text=True, keep_images=False)          
+            out_path = os.path.join(settings.outDir, f"{loopCounter:03d}_1.png")
             slide.Export(out_path, "PNG", 4096, 2048)
 
             #2 = photos only. Clear the background and delete all non-text elements.
-            slide = presentation.Slides.Item(i + 2)
-            filterShapes(slide, keep_text=False, keep_images=True)
-            out_path = os.path.abspath(os.path.join(out_dir, f"{loopCounter:03d}_2.png"))
+            slide = self.presentation.Slides.Item(i + 2)
+            PPT._filterShapes(slide, keep_text=False, keep_images=True)
+            out_path = os.path.join(settings.outDir, f"{loopCounter:03d}_2.png")
             slide.Export(out_path, "PNG", 4096, 2048)
             
             loopCounter += 1
 
-    def combineLayers():        
-        count = int(presentation.Slides.Count / 3)
+    def postprocess(self):
+        global settings
+        count = int(self.presentation.Slides.Count / 3)
         for i in range(1, count + 1):
-            print(f"Processing slide {i} of {count}...", flush=True)
+            print(f"Post-processing slide {i} of {count}...", flush=True)
             #we have to convert to RGB because Powerpoint will use an indexed pallete if the image is simple
-            img0 = Image.open(os.path.abspath(os.path.join(out_dir, f"{i:03d}_0.png"))).convert('RGB')     #bg 
-            img1 = Image.open(os.path.abspath(os.path.join(out_dir, f"{i:03d}_1.png"))).convert('RGB')     #text
-            img2 = Image.open(os.path.abspath(os.path.join(out_dir, f"{i:03d}_2.png"))).convert('RGB')     #photos
+            img0 = Image.open(os.path.join(settings.outDir, f"{i:03d}_0.png")).convert('RGB')     #bg 
+            img1 = Image.open(os.path.join(settings.outDir, f"{i:03d}_1.png")).convert('RGB')     #text
+            img2 = Image.open(os.path.join(settings.outDir, f"{i:03d}_2.png")).convert('RGB')     #photos
             bigImg = Image.new(mode='RGBA', size=[img1.width, img0.height + img1.height], color="#00000000")
     
             #Generate alpha channels with difference masks
@@ -237,43 +239,41 @@ def export_slides_layered(ppt_path: str):
             img2 = img2.resize((2048, 2048))
             bigImg.paste(img2, (img0.width, img1.height))   #bottom right is the photos, half res
 
-            #save the file as DDS.
-            finalpath = os.path.abspath(os.path.join(out_dir, f"{i:03d}.dds"))
-            metadata[i]["path"] = finalpath
-            #DXT1 has 1bit alpha, which should be sufficient for our use
-            bigImg.save(finalpath, pixel_format="DXT1")
+            #save the file as DDS, which imports easily into Unity
+            finalpath = os.path.join(settings.outDir, f"{i:03d}.dds")
+            settings.metadata[i]["path"] = finalpath
+            bigImg.save(finalpath, pixel_format="DXT5")
 
         #remove temp PNGs
-        for filename in listdir(out_dir):
+        for filename in listdir(settings.outDir):
             if "_" in filename and filename[-3:].lower() == 'png':
-                os.remove(os.path.join(out_dir, filename))  
-
-    #the processing pipeline for 3D slides:
-    slides, count = initPPT(ppt_path)
-    metadata[0]["layers"] = True    #overriding this value
-    expandSlides()
-    exportLayers()
-    combineLayers()       
-    closePPT()
-        
+                os.remove(os.path.join(settings.outDir, filename)) 
 
 if __name__ == "__main__":
+    #process the input arguments
     parser = argparse.ArgumentParser(description="Export PowerPoint slides to PNG using pywin32 COM")    
+    parser.add_argument("-d", "--debug", action='store_true', help="Enable debug mode")
     parser.add_argument("-3d", "--layers", action='store_true', help="Enable automatic 3D layer conversion")
     parser.add_argument("-o", "--out", default="slides", help="Output directory for PNG files")
     parser.add_argument("ppt", help="Path to PowerPoint file")
-
     args = parser.parse_args()
-    global out_dir
-    out_dir = args.out
 
-    if checkForDupe(args.ppt, args.layers) == False:
+    global settings
+    settings = Settings(args.ppt, args.out, args.layers, args.debug)
+    
+    if settings.checkForDupe() == False and settings.debug == False:
         sys.exit(0)    
 
-    if args.layers:
-        export_slides_layered(args.ppt)
+    #main conversion pipeline starts here
+    ppt = PPT()
+    if settings.layers == False:
+        ppt.render2DSlides() 
     else:
-        export_slides(args.ppt)           
+        ppt.expandSlides()
+        ppt.render3DSlides()
+        ppt.postprocess()
+      
+    ppt.close()
         
     print("Conversion complete.", flush=True)
     print()
