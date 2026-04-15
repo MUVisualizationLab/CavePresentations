@@ -74,13 +74,12 @@ class Settings:
         metadata_path = os.path.join(self.outDir, "metadata.json")
         with open(metadata_path, "w", encoding="utf-8") as f:
             f.write(json.dumps(self.metadata, indent=2, ensure_ascii=True))
-        #    json.dump(self.metadata, f, indent=2, ensure_ascii=True)
 
 
 class PPT:
     def __init__(self, settings):
-        self.settings = settings
         print("Opening PowerPoint...", flush=True)   
+        self.settings = settings        #callback
         makedirs(self.settings.outDir, exist_ok=True)
     
         #remove old images from output directory
@@ -100,6 +99,7 @@ class PPT:
 
         self.slides = self.presentation.Slides
         self.settings.slideCount = self.presentation.Slides.Count
+        self.LUT = None         #cache used during post-processing
    
     @staticmethod
     def _getNotes(slide):
@@ -134,30 +134,33 @@ class PPT:
                 continue
             s.Delete()
 
-    @staticmethod
-    def _setupMask(fgImg, bgImg):
+    def _setupMask(self, fgImg, bgImg):
         def scale(i):
             #tunable settings. This boosts contrast and soft-thresholds the alpha channel.
             black, gamma, white = 0.02, 1.5, 0.5
 
             # Normalize to 0–1
             v = (i - black) / (white - black)
-            v = max(0, min(v, 1))  # clamp
-        
+            v = max(0, min(v, 1))  # clamp        
             # Apply gamma (midtone)
             v = v ** gamma
         
-            # Scale back to 0–255
+            # Scale back to 0–255 
             return int(v * 255)
 
         #difference mask
         maskImg = ImageChops.difference(fgImg, bgImg).convert("L")
 
-        # Build LUT
-        lut = [scale(i) for i in range(256)]
-        maskImg.point(lut * len(maskImg.getbands()))
-
+        if self.LUT == None:
+            self.LUT = [scale(i) for i in range(256)]
+        maskImg.point(self.LUT)
+        
         return maskImg
+        
+    def scanForMovies(self):
+        """todo"""        
+        for i in range(1, self.settings.slideCount + 1):
+            pass
     
 
     def render2DSlides(self):
@@ -170,13 +173,15 @@ class PPT:
             out_path = os.path.abspath(os.path.join(self.settings.outDir, f"{i:03d}.png"))
             slide.Export(out_path, "PNG", 4096, 2048)   #powers of 2. Aspect ratio is corrected in Unity.                   
             self.settings.addMetadata(i, out_path,  PPT._getNotes(slide), slide.SlideShowTransition.EntryEffect)
+        self.scanForMovies()
     
     def expandSlides(self):
         #get metadata in place before we mix things up  
         for i in range(1, self.settings.slideCount + 1):
             slide = self.slides.Item(i)            
             self.settings.addMetadata(i, "", PPT._getNotes(slide), slide.SlideShowTransition.EntryEffect)
-        
+            
+        self.scanForMovies()        
         #triple the amount of slides in the ppt, creating placeholders for the filtering to occur
         print(f"Expanding slide layers...", flush=True)
         repeat_count = 3  # original + 2 duplicates
@@ -225,13 +230,13 @@ class PPT:
             img0 = Image.open(os.path.join(self.settings.outDir, f"{i:03d}_0.png")).convert('RGB')     #bg 
             img1 = Image.open(os.path.join(self.settings.outDir, f"{i:03d}_1.png")).convert('RGB')     #text
             img2 = Image.open(os.path.join(self.settings.outDir, f"{i:03d}_2.png")).convert('RGB')     #photos
-            bigImg = Image.new(mode='RGBA', size=[img1.width, img0.height + img1.height], color="#00000000")
     
             #Generate alpha channels on text and photos
-            img1.putalpha(PPT._setupMask(img1, img0))
-            img2.putalpha(PPT._setupMask(img2, img0))
+            img1.putalpha(self._setupMask(img1, img0))
+            img2.putalpha(self._setupMask(img2, img0))
     
             #make the collage            
+            bigImg = Image.new(mode='RGBA', size=[img1.width, img0.height + img1.height], color="#00000000")
             bigImg.paste(img1, (0,0))                       #text takes up the top half
             img0 = img0.resize((2048, 2048))
             bigImg.paste(img0, (0, img1.height))            #bottom left is the background, half res           
@@ -241,6 +246,7 @@ class PPT:
             #save the file as DDS, which imports easily into Unity
             finalpath = os.path.join(self.settings.outDir, f"{i:03d}.dds")
             self.settings.metadata[i]["path"] = finalpath
+            #DXT1 has 1-bit alpha, but that's ok since the layers don't need partial transparency
             bigImg.save(finalpath, pixel_format="DXT1")
 
         #remove temp PNGs
