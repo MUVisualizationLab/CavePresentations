@@ -49,20 +49,17 @@
     <Analyzer Include="C:\Program Files\Unity\Hub\Editor\6000.0.68f1\Editor\Data\Tools\Unity.SourceGenerators\Unity.UIToolkit.SourceGenerator.dll" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="Assets\Scripts\ppt\slideMaster.cs" />
-    <Compile Include="Assets\Scripts\ppt\slideLoader.cs" />
-    <Compile Include="Assets\Scripts\emergencyReload.cs" />
-    <Compile Include="Assets\Scripts\modifySlide.cs" />
-    <Compile Include="Assets\Scripts\clickOnSides.cs" />
-    <Compile Include="Assets\Scripts\ppt\PPTSelector.cs" />
-    <Compile Include="Assets\Scripts\drawingManager.cs" />
+    <Compile Include="Assets\Slideshow\Scripts\slideLoader.cs" />
+    <Compile Include="Assets\Slideshow\Scripts\slideMeta.cs" />
+    <Compile Include="Assets\Slideshow\Scripts\clickOnSides.cs" />
+    <Compile Include="Assets\Slideshow\Scripts\drawingManager.cs" />
+    <Compile Include="Assets\Slideshow\Scripts\slideMaster.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="Assets\TextMesh Pro\Shaders\TMPro.cginc" />
     <None Include="Assets\TextMesh Pro\Shaders\TMP_SDF-Mobile Overlay.shader" />
     <None Include="Assets\TextMesh Pro\Shaders\TMP_SDF-Mobile-2-Pass.shader" />
     <None Include="Assets\StreamingAssets\PPTConvert\vcruntime140.dll" />
-    <None Include="Assets\Scripts\Photos.shader" />
     <None Include="Assets\TextMesh Pro\Shaders\TMP_Bitmap.shader" />
     <None Include="Assets\StreamingAssets\PPTConvert\libcrypto-3.dll" />
     <None Include="Assets\StreamingAssets\PPTConvert\pywintypes312.dll" />
